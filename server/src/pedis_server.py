@@ -4,10 +4,11 @@ from server.src.resp_code import Resp
 from server.src.data_struct import *
 
 
-db = RedisData()
+DB = RedisData()
+
 COMMAND = {
-    'KEYS',
-    'GET', 'MGET', 'SET', 'MSET',
+    'KEYS', 'DEL', 'TYPE',
+    'GET', 'MGET', 'SET', 'MSET', 'STRLEN',
     'HSET', 'HGET', 'HMSET', 'HMGET', 'HLEN', 'HKEYS', 'HGETALL',
     'LPUSH', 'RPUSH', 'LPOP', 'RPOP', 'LLEN', 'LINDEX', 'LSET',
     'SAVE', 'BGSAVE',
@@ -48,12 +49,12 @@ class PedisServer:
 
             await self.recv()
 
-            com = await self.recv()
+            com = (await self.recv()).upper()
 
-            if com.upper() not in COMMAND:
+            if com not in COMMAND:
                 info = Resp.error(f'unknown command {com}')
             else:
-                info = await getattr(self, com.lower())(count-1)
+                info = await getattr(self, com)(count-1)
 
             self.writer.write(info)
             try:
@@ -74,26 +75,44 @@ class PedisServer:
             mapping[k] = v
         return mapping
 
-    async def keys(self, count):
+    async def TYPE(self, count):
+        if count != 1:
+            return Resp.error('wrong number of arguments for TYPE command')
+
+        key = await self.get_key()
+
+        return Resp.ok(self.db.type_(key))
+
+    async def DEL(self, count):
+        if count < 1:
+            return Resp.error('wrong number of arguments for TYPE command')
+
+        keys = {await self.get_key() for _ in range(count)}
+
+        return Resp.integer(self.db.del_(keys))
+
+    async def KEYS(self, count):
         if count != 1:
             return Resp.error('wrong number of arguments for KEYS command')
         pattern = await self.get_key()
         return Resp.encode(self.db.keys(pattern))
 
-    async def mget(self, count, opt='*'):
+    async def MGET(self, count, opt='*'):
         if count < 1:
             return Resp.error('wrong number of arguments for MGET command')
 
         keys = [await self.get_key() for _ in range(count)]
 
-        return Resp.encode(self.db.get(*keys), opt)
+        m = True if opt == '*' else False
 
-    async def get(self, count):
+        return Resp.encode(self.db.get(m, *keys), opt)
+
+    async def GET(self, count):
         if count != 1:
             return Resp.error('wrong number of arguments for GET command')
-        return await self.mget(1, '$')
+        return await self.MGET(1, '$')
 
-    async def mset(self, count):
+    async def MSET(self, count):
         if count % 2:
             return Resp.error('wrong number of arguments for MSET')
 
@@ -104,13 +123,12 @@ class PedisServer:
             return Resp.ok()
         return Resp.error('fail')
 
-    async def set(self, count):
+    async def SET(self, count):
         if count != 2:
-            await self.reader.read()
             return Resp.error('wrong number of arguments for SET command')
-        return await self.mset(2)
+        return await self.MSET(2)
 
-    async def hmget(self, count, opt='*'):
+    async def HMGET(self, count, opt='*'):
         if count < 2:
             return Resp.error('wrong number of arguments for HMGET command')
         key = await self.get_key()
@@ -119,12 +137,12 @@ class PedisServer:
 
         return Resp.encode(self.db.hget(key, *fields), opt)
 
-    async def hget(self, count):
+    async def HGET(self, count):
         if count != 2:
             return Resp.error('wrong number of arguments for HGET command')
-        return await self.hmget(2, '$')
+        return await self.HMGET(2, '$')
 
-    async def hmset(self, count):
+    async def HMSET(self, count):
         count -= 1
         if count % 2:
             return Resp.error('ERR wrong number of arguments for HMSET')
@@ -134,28 +152,29 @@ class PedisServer:
         mapping = await self.get_key_value(count//2)
 
         if len(mapping) == count // 2:
-            self.db.hset(key, **mapping)
-            return Resp.ok()
+            return Resp.encode(self.db.hset(key, **mapping))
+
         return Resp.error('fail')
 
-    async def hset(self, count):
+    async def HSET(self, count):
         if count != 3:
             return Resp.error('wrong number of arguments for HSET command')
-        return await self.hmset(3)
+        return await self.HMSET(3)
 
-    async def hlen(self, count):
+    async def HLEN(self, count):
         if count != 1:
             return Resp.error('wrong number of arguments for HLEN command')
         key = await self.get_key()
-        return Resp.integer(self.db.hlen(key))
 
-    async def hkeys(self, count):
+        return Resp.encode(self.db.hlen(key))
+
+    async def HKEYS(self, count):
         if count != 1:
             return Resp.error('wrong number of arguments for HKEYS command')
         key = await self.get_key()
         return Resp.encode(self.db.hkeys(key))
 
-    async def hgetall(self, count):
+    async def HGETALL(self, count):
         if count != 1:
             return Resp.error('wrong number of arguments for HGETALL command')
         key = await self.get_key()
@@ -166,43 +185,43 @@ class PedisServer:
             info.append(v)
         return Resp.encode(info)
 
-    async def lpush(self, count):
+    async def LPUSH(self, count):
         if count < 2:
             return Resp.error('wrong number of arguments for LPUSH command')
         key = await self.get_key()
 
         values = [await self.get_key() for _ in range(count-1)]
 
-        return Resp.integer(self.db.lpush(key, values))
+        return Resp.encode(self.db.lpush(key, values))
 
-    async def rpush(self, count):
+    async def RPUSH(self, count):
         if count < 2:
             return Resp.error('wrong number of arguments for RPUSH command')
         key = await self.get_key()
 
         values = [await self.get_key() for _ in range(count - 1)]
 
-        return Resp.integer(self.db.rpush(key, values))
+        return Resp.encode(self.db.rpush(key, values))
 
-    async def lpop(self, count):
+    async def LPOP(self, count):
         if count != 1:
             return Resp.error('wrong number of arguments for LPOP command')
         key = await self.get_key()
-        return Resp.encode([self.db.lpop(key)], '$')
+        return Resp.encode(self.db.lpop(key), '$')
 
-    async def rpop(self, count):
+    async def RPOP(self, count):
         if count != 1:
             return Resp.error('wrong number of arguments for RPOP command')
         key = await self.get_key()
-        return Resp.encode([self.db.rpop(key)], '$')
+        return Resp.encode(self.db.rpop(key), '$')
 
-    async def llen(self, count):
+    async def LLEN(self, count):
         if count != 1:
             return Resp.error('wrong number of arguments for LLEN command')
         key = await self.get_key()
-        return Resp.integer(self.db.llen(key))
+        return Resp.encode(self.db.llen(key))
 
-    async def lindex(self, count):
+    async def LINDEX(self, count):
         if count != 2:
             return Resp.error('wrong number of arguments for LLEN command')
 
@@ -213,9 +232,9 @@ class PedisServer:
             index = int(index)
         except ValueError:
             return Resp.error('value is not an integer')
-        return Resp.encode([self.db.lindex(key, index)], '$')
+        return Resp.encode(self.db.lindex(key, index), '$')
 
-    async def lset(self, count):
+    async def LSET(self, count):
         if count != 3:
             return Resp.error('wrong number of arguments for LSET command')
 
@@ -229,21 +248,26 @@ class PedisServer:
 
         value = await self.get_key()
 
-        if self.db.lset(key, index, value):
-            return Resp.ok()
-        return Resp.error('index out of range')
+        ret = self.db.lset(key, index, value)
 
-    async def save(self, *args):
+        if ret == 0:
+            return Resp.ok()
+        if ret == 1:
+            return Resp.error('index out of range')
+        if ret == -1:
+            return Resp.encode(False)
+
+    async def SAVE(self, *args):
         self.db.save()
         return Resp.ok()
 
-    async def bgsave(self, *args):
+    async def BGSAVE(self, *args):
         self.db.bgsave()
         return Resp.ok('Background saving started')
 
 
 async def handle(reader, writer):
-    server = PedisServer(reader, writer, db)
+    server = PedisServer(reader, writer, DB)
     client = writer.get_extra_info('peername')
     # print(f'get new client {client!r}')
     await server._handle()
@@ -252,15 +276,16 @@ async def handle(reader, writer):
 
 
 async def main():
-    # 启动服务器
     server = await asyncio.start_server(handle, '127.0.0.1', '12345')
 
-    addr = server.sockets[0].getsockname()
-    print(f'Serving on {addr}')
+    host = server.sockets[0].getsockname()
+    print(f'Serving on {host}')
 
-    async with server:
-        await server.serve_forever()
-
+    try:
+        async with server:
+            await server.serve_forever()
+    finally:
+        DB.save()
 
 if __name__ == '__main__':
     asyncio.run(main())

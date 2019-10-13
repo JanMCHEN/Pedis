@@ -1,6 +1,17 @@
 class Resp:
     @staticmethod
-    def encode(text: list, opt='*'):
+    def encode(text, opt='*'):
+        if isinstance(text, bool):
+            if text:
+                return Resp.ok()
+            return Resp.error('Operation against a key holding the wrong kind of value', 'WRONGTYPE')
+
+        if isinstance(text, int):
+            return Resp.integer(text)
+
+        if isinstance(text, str):
+            text = [text]
+
         if not text:
             return Resp.ok('(empty list or set)')
         res = []
@@ -20,8 +31,8 @@ class Resp:
         return byte.decode().split('\r\n')
 
     @staticmethod
-    def error(info):
-        return f'-ERR {info}\r\n'.encode()
+    def error(info, op='ERR'):
+        return f'-{op} {info}\r\n'.encode()
 
     @staticmethod
     def ok(s='OK'):

@@ -17,6 +17,12 @@ class RedisHash(UserDict):
         return self[key]
 
 
+class RedisList(UserDict):
+    def __missing__(self, key):
+        self[key] = deque()
+        return self[key]
+
+
 class RedisSet(UserDict):
     def __missing__(self, key):
         self[key] = set()
@@ -29,24 +35,38 @@ class RedisZset(UserDict):
         return self[key]
 
 
-class RedisList(UserDict):
+class RedisKey(UserDict):
+    def __init__(self, *args):
+        super().__init__()
+        self.zip = args
+
     def __missing__(self, key):
-        self[key] = deque()
-        return self[key]
+        return None
+
+    def pop(self, k):
+        if self[k] is not None:
+            del self.zip[self[k]][k]
+            del self[k]
+            return True
+        return False
 
 
 class RedisData:
-    __slots__ = ('STR', 'HASH', 'SET', 'ZSET', 'LIST')
+    __slots__ = ('STRING', 'HASH', 'LIST', 'SET', 'ZSET', 'KEYS', 'EXPIRES')
 
-    # TODO 线程安全
+    # TODO 线程不安全
     _obj = None
 
     def __init__(self):
-        self.STR = RedisDict()
+        self.STRING = RedisDict()
         self.HASH = RedisHash()
+        self.LIST = RedisList()
         self.SET = RedisSet()
         self.ZSET = RedisZset()
-        self.LIST = RedisList()
+
+        self.KEYS = RedisKey(self.STRING, self.HASH, self.LIST, self.SET, self.ZSET)
+        self.EXPIRES = RedisDict()
+
         load(PDB_FILE)
 
     def __new__(cls, *args, **kwargs):
@@ -54,11 +74,13 @@ class RedisData:
             cls._obj = super().__new__(cls)
         return cls._obj
 
+    def _check_key(self, key, tp):
+        real_tp = self.KEYS[key]
+        if real_tp is None or real_tp == tp:
+            return 1
+        return 0
+
     def keys(self, pattern: str):
-        keys = set(self.STR.keys())
-        keys.update(self.HASH.keys())
-        keys.update(self.LIST.keys())
-        keys.update(self.ZSET.keys())
 
         def match(string):
             i = j = 0
@@ -77,66 +99,122 @@ class RedisData:
                 return False
             return True
 
-        return [key for key in keys if match(key)]
+        return [key for key in self.KEYS if match(key)]
 
-    def get(self, *keys):
-        return [self.STR[key] for key in keys]
+    def type_(self, key):
+        if self.KEYS[key] is not None:
+            return self.__slots__[self.KEYS[key]].lower()
+        return 'none'
+
+    def del_(self, keys):
+        count = 0
+        for key in keys:
+            count += self.KEYS.pop(key)
+
+        return count
+
+    def get(self, m=False, *keys):
+        if not m and not self._check_key(keys[0], 0):
+            return False
+        return [self.STRING[key] for key in keys]
 
     def set(self, **mapping):
-        self.STR.update(mapping)
+        for k, v in mapping.items():
+            if self.KEYS[k] is not None and self.KEYS[k] > 0:
+                self.KEYS.pop(k)
+            self.KEYS[k] = 0
+            self.STRING[k] = v
 
     def hget(self, key, *fields):
+        if not self._check_key(key, 1):
+            return False
         return [self.HASH[key][field] for field in fields]
 
     def hset(self, key, **mapping):
+        if not self._check_key(key, 1):
+            return False
+        self.KEYS[key] = 1
         self.HASH[key].update(mapping)
+        return True
 
     def hlen(self, key):
+        if not self._check_key(key, 1):
+            return False
         return len(self.HASH[key])
 
     def hkeys(self, key):
+        if not self._check_key(key, 1):
+            return False
         return self.HASH[key].keys()
 
     def hgetall(self, key):
+        if not self._check_key(key, 1):
+            return False
         return self.HASH[key].items()
 
     def lpush(self, key, values):
+        if not self._check_key(key, 2):
+            return False
+
+        self.KEYS[key] = 2
+
         for v in values:
             self.LIST[key].appendleft(v)
         return self.llen(key)
 
     def rpush(self, key, values):
+        if not self._check_key(key, 2):
+            return False
+
+        self.KEYS[key] = 2
+
         for v in values:
             self.LIST[key].append(v)
         return self.llen(key)
 
     def lpop(self, key):
-        try:
-            return self.LIST[key].popleft()
-        except IndexError:
+        if self.KEYS[key] is None:
             return None
+
+        if self.KEYS[key] == 2:
+            ret = self.LIST[key].popleft()
+            if not self.LIST[key]:
+                self.KEYS.pop(key)
+            return ret
+        return None
 
     def rpop(self, key):
-        try:
-            return self.LIST[key].pop()
-        except IndexError:
+        if self.KEYS[key] is None:
             return None
 
+        if self.KEYS[key] == 2:
+            ret = self.LIST[key].popleft()
+            if not self.LIST[key]:
+                self.KEYS.pop(key)
+            return ret
+        return None
+
     def llen(self, key):
+        if not self._check_key(key, 2):
+            return False
         return len(self.LIST[key])
 
     def lindex(self, key, index):
+        if not self._check_key(key, 2):
+            return False
         try:
             return self.LIST[key][index]
         except IndexError:
             return None
 
     def lset(self, key, index, value):
+        if not self._check_key(key, 2):
+            return -1
         try:
             self.LIST[key][index] = value
-            return True
+            return 0
         except IndexError:
-            return False
+            return 1
 
     def save(self):
         dump(self, PDB_FILE)
