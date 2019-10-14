@@ -1,13 +1,20 @@
+"""
+服务器核心代码
+"""
+
+
 import asyncio
 
 from server.src.resp_code import Resp
 from server.src.data_struct import *
+from server.src.timer import Timer
 
 
 DB = RedisData()
+TIME = Timer()
 
 COMMAND = {
-    'KEYS', 'DEL', 'TYPE',
+    'KEYS', 'DEL', 'TYPE', 'EXPIRE', 'PERSIST', 'TTL',
     'GET', 'MGET', 'SET', 'MSET', 'STRLEN',
     'HSET', 'HGET', 'HMSET', 'HMGET', 'HLEN', 'HKEYS', 'HGETALL',
     'LPUSH', 'RPUSH', 'LPOP', 'RPOP', 'LLEN', 'LINDEX', 'LSET',
@@ -96,6 +103,36 @@ class PedisServer:
             return Resp.error('wrong number of arguments for KEYS command')
         pattern = await self.get_key()
         return Resp.encode(self.db.keys(pattern))
+
+    async def EXPIRE(self, count):
+        if count != 2:
+            return Resp.error('wrong number of arguments for EXPIRE command')
+        key = await self.get_key()
+
+        seconds = await self.get_key()
+
+        try:
+            seconds = int(seconds)
+        except ValueError:
+            return Resp.error('value is not an integer')
+
+        if self.db.expire(key, seconds):
+            TIME.expire(key)
+            return Resp.integer(1)
+        return Resp.integer(0)
+
+    async def PERSIST(self, count):
+        if count != 1:
+            return Resp.error('wrong number of arguments for PERSIST command')
+        key = await self.get_key()
+        return Resp.integer(TIME.persist(key))
+
+    async def TTL(self, count):
+        if count != 1:
+            return Resp.error('wrong number of arguments for TTL command')
+        key = await self.get_key()
+
+        return Resp.integer(self.db.ttl(key))
 
     async def MGET(self, count, opt='*'):
         if count < 1:
@@ -280,6 +317,8 @@ async def main():
 
     host = server.sockets[0].getsockname()
     print(f'Serving on {host}')
+
+    Timer(asyncio.get_running_loop())
 
     try:
         async with server:
