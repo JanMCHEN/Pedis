@@ -155,15 +155,31 @@ class PedisServer:
 
         mapping = await self.get_key_value(count//2)
 
-        if len(mapping) == count // 2:
-            self.db.set(**mapping)
-            return Resp.ok()
-        return Resp.error('fail')
+        self.db.set(**mapping)
+        return Resp.ok()
 
     async def SET(self, count):
-        if count != 2:
+        if count < 2:
             return Resp.error('wrong number of arguments for SET command')
-        return await self.MSET(2)
+        key = await self.get_key()
+        val = await self.get_key()
+
+        cmd = [await self.get_key() for _ in range(count-2)]
+
+        if not cmd:
+            self.db.set(**{key: val})
+            return Resp.ok()
+
+        if len(cmd) == 2 and cmd[0].lower() == 'ex':
+            try:
+                sec = int(cmd[1])
+            except ValueError:
+                return Resp.error('value is not an integer')
+            self.db.set(**{key: val})
+            self.db.expire(key, sec)
+            TIME.expire(key)
+            return Resp.ok()
+        return Resp.error('syntax error')
 
     async def HMGET(self, count, opt='*'):
         if count < 2:
