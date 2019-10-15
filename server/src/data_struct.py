@@ -255,7 +255,7 @@ class RedisData:
             if not self.LIST[key]:
                 self.KEYS.pop(key)
             return ret
-        return None
+        return False
 
     def rpop(self, key):
         if self.KEYS[key] is None:
@@ -268,7 +268,7 @@ class RedisData:
             if not self.LIST[key]:
                 self.KEYS.pop(key)
             return ret
-        return None
+        return False
 
     def llen(self, key):
         if not self._check_key(key, 2):
@@ -292,6 +292,49 @@ class RedisData:
             return 0
         except IndexError:
             return 1
+
+    def sadd(self, key, members):
+        if not self._check_key(key, 3):
+            return False
+        self.KEYS[key] = 3
+
+        self.SET[key].update(members)
+
+        self.KEYS.modify += len(members)
+
+        return True
+
+    def spop(self, key):
+        if self.KEYS[key] is None:
+            return None
+
+        if self.KEYS[key] == 3:
+            ret = self.SET[key].pop()
+            self.KEYS.modify += 1
+
+            if not self.SET[key]:
+                self.KEYS.pop(key)
+            return ret
+        return False
+
+    def scard(self, key):
+        if not self._check_key(key, 3):
+            return False
+
+        return len(self.SET[key])
+
+    def smembers(self, key):
+        if not self._check_key(key, 3):
+            return False
+        return self.SET[key]
+
+    def srem(self, key, values):
+        if not self._check_key(key, 3):
+            return False
+
+        self.SET[key] -= values
+
+        return len(self.SET[key])
 
     def save(self):
         dump(self, PDB_FILE)

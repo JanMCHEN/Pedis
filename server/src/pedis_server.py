@@ -10,21 +10,24 @@ from server.src.data_struct import *
 from server.src.timer import Timer
 
 
+# 数据初始化
 DB = RedisData()
 TIME = Timer()
 
+# 支持命令列表
 COMMAND = {
     'KEYS', 'DEL', 'TYPE', 'EXPIRE', 'PERSIST', 'TTL',
     'GET', 'MGET', 'SET', 'MSET', 'STRLEN',
     'HSET', 'HGET', 'HMSET', 'HMGET', 'HLEN', 'HKEYS', 'HGETALL',
     'LPUSH', 'RPUSH', 'LPOP', 'RPOP', 'LLEN', 'LINDEX', 'LSET',
+    'SADD', 'SPOP', 'SCARD', 'SMEMBERS', 'SREM',
     'SAVE', 'BGSAVE',
 
 }
 
 
 class PedisServer:
-    """简易版redis服务器"""
+    """简易版redis服务器实现"""
     def __init__(self, reader, writer, database=None):
         self.reader = reader
         self.writer = writer
@@ -32,11 +35,13 @@ class PedisServer:
 
     @staticmethod
     def command_process(data, opt='*'):
+        """解析'*，$'等后面跟的数字"""
         if data[0] == opt and data[1:].isdigit():
             return int(data[1:])
         return 0
 
     async def recv(self):
+        """接收数据，直到\r\n"""
         try:
             data = await self.reader.readuntil(separator=b'\r\n')
         except (asyncio.IncompleteReadError, ConnectionResetError):
@@ -44,7 +49,9 @@ class PedisServer:
         return data.decode().strip('\r\n')
 
     async def _handle(self):
+        """每个客户端连接时的回调函数"""
         while True:
+            # 接收*...，表示接下来会收到几个指令
             data = await self.recv()
             if data == -1:
                 break
@@ -54,15 +61,19 @@ class PedisServer:
             if count < 1:
                 continue
 
+            # 接收第一个命令前表示命令长度的数据
             await self.recv()
 
+            # 第一个命令
             com = (await self.recv()).upper()
 
+            # 根据第一个命令选择处理方式
             if com not in COMMAND:
                 info = Resp.error(f'unknown command {com}')
             else:
                 info = await getattr(self, com)(count-1)
 
+            # 返回给客户端
             self.writer.write(info)
             try:
                 await self.writer.drain()
@@ -70,11 +81,13 @@ class PedisServer:
                 continue
 
     async def get_key(self):
+        """用于接收1个键值"""
         r = await self.recv()
         length = self.command_process(r, '$')
         return (await self.reader.readexactly(length + 2)).decode().strip('\r\n')
 
     async def get_key_value(self, count):
+        """用于接收1个键值对"""
         mapping = {}
         for i in range(count):
             k = await self.get_key()
@@ -309,6 +322,57 @@ class PedisServer:
             return Resp.error('index out of range')
         if ret == -1:
             return Resp.encode(False)
+
+    async def SADD(self, count):
+        if count < 2:
+            return Resp.error('wrong number of arguments for SADD command')
+
+        key = await self.get_key()
+
+        members = [await self.get_key() for _ in range(count-1)]
+
+        return Resp.encode(self.db.sadd(key, members))
+
+    async def SPOP(self, count):
+        if count == 0 or count > 2:
+            return Resp.error('wrong number of arguments for SPOP command')
+
+        key = await self.get_key()
+
+        if count == 1:
+            return Resp.encode(self.db.spop(key), '$')
+
+        try:
+            count = int(await self.get_key())
+        except ValueError:
+            return Resp.error('value is not an integer')
+        ret = [self.db.spop(key) for _ in range(count)]
+
+        return Resp.encode(ret)
+
+    async def SCARD(self, count):
+        if count != 1:
+            return Resp.error('wrong number of arguments for SCARD command')
+        key = await self.get_key()
+        return Resp.encode(self.db.scard(key))
+
+    async def SMEMBERS(self, count):
+        if count != 1:
+            return Resp.error('wrong number of arguments for SMEMBERS command')
+
+        key = await self.get_key()
+
+        return Resp.encode(self.db.smembers(key))
+
+    async def SREM(self, count):
+        if count < 2:
+            return Resp.error('wrong number of arguments for REM command')
+
+        key = await self.get_key()
+
+        values = {await self.get_key() for _ in range(count-1)}
+
+        return Resp.encode(self.db.srem(key, values))
 
     async def SAVE(self, *args):
         self.db.save()
